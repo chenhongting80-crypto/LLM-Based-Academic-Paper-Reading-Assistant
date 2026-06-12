@@ -1,0 +1,10 @@
+streamlit
+langchain
+langchain-openai
+langchain-core
+PyMuPDF
+pandas
+pydantic
+python-dotenv
+scikit-learn
+fpdf2
