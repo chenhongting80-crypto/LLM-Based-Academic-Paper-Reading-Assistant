@@ -1,0 +1,12 @@
+streamlit==1.58.0
+langchain-openai==0.3.35
+langchain-core==0.3.86
+PyMuPDF==1.27.2.3
+pandas==3.0.1
+pydantic==2.13.3
+python-dotenv==1.2.2
+scikit-learn==1.8.0
+SQLAlchemy==2.0.49
+PyMySQL==1.1.2
+fpdf2==2.8.5
+ruff==0.14.9
