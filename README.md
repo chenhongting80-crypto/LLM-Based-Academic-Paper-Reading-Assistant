@@ -118,8 +118,8 @@ flowchart LR
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-username/ai-paper-reader.git
-cd ai-paper-reader
+git clone https://github.com/chenhongting80-crypto/LLM-Based-Academic-Paper-Reading-Assistant.git
+cd LLM-Based-Academic-Paper-Reading-Assistant
 ```
 
 ### 2. Create and activate a virtual environment
