@@ -7,6 +7,6 @@ pydantic==2.13.3
 python-dotenv==1.2.2
 scikit-learn==1.8.0
 SQLAlchemy==2.0.49
-PyMySQL==1.1.2
+PyMySQL[rsa]==1.1.2
 fpdf2==2.8.5
 ruff==0.14.9
