@@ -665,29 +665,61 @@ def app() -> None:
     st.title("AI Paper Reader")
     st.caption(APP_SUBTITLE)
 
+    server_api_settings = {
+        "api_key": os.getenv("OPENAI_API_KEY", "").strip(),
+        "base_url": os.getenv("OPENAI_BASE_URL", "").strip(),
+        "model_name": os.getenv("OPENAI_MODEL", "").strip(),
+    }
+    server_api_configured = all(server_api_settings.values())
+
     with st.sidebar:
         st.header("API Settings")
-        sidebar_api_key = st.text_input(
-            "API Key",
-            type="password",
-            value="",
-            key="api_key_input",
-        )
-        sidebar_base_url = st.text_input(
-            "Base URL",
-            value="",
-            key="base_url_input",
-        )
-        sidebar_model_name = st.text_input(
-            "Model Name",
-            value="",
-            key="model_name_input",
-        )
-        api_settings = {
-            "api_key": sidebar_api_key.strip(),
-            "base_url": sidebar_base_url.strip(),
-            "model_name": sidebar_model_name.strip(),
-        }
+        if server_api_configured:
+            masked_value = "••••••••••••"
+            st.text_input(
+                "API Key",
+                type="password",
+                value=masked_value,
+                key="api_key_input",
+                disabled=True,
+            )
+            st.text_input(
+                "Base URL",
+                type="password",
+                value=masked_value,
+                key="base_url_input",
+                disabled=True,
+            )
+            st.text_input(
+                "Model Name",
+                type="password",
+                value=masked_value,
+                key="model_name_input",
+                disabled=True,
+            )
+            api_settings = server_api_settings
+        else:
+            sidebar_api_key = st.text_input(
+                "API Key",
+                type="password",
+                value="",
+                key="api_key_input",
+            )
+            sidebar_base_url = st.text_input(
+                "Base URL",
+                value="",
+                key="base_url_input",
+            )
+            sidebar_model_name = st.text_input(
+                "Model Name",
+                value="",
+                key="model_name_input",
+            )
+            api_settings = {
+                "api_key": sidebar_api_key.strip(),
+                "base_url": sidebar_base_url.strip(),
+                "model_name": sidebar_model_name.strip(),
+            }
         st.session_state["api_settings"] = api_settings
         if all(api_settings.values()):
             llm, llm_warning = get_llm(**api_settings)
