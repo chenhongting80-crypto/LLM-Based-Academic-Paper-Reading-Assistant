@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from paper_reader.llm.client import _safe_llm_error
+from paper_reader.llm.client import _safe_llm_error, select_chat_model
 from paper_reader.llm.parsing import parse_json_model
 from paper_reader.models.schemas import ReadingCard
 from paper_reader.services.qa import INSUFFICIENT_EVIDENCE_MESSAGE, answer_from_retrieved_chunks
@@ -73,6 +74,29 @@ class LlmAndServiceTests(unittest.TestCase):
     def test_llm_error_redacts_api_key_fragments(self) -> None:
         error = _safe_llm_error(RuntimeError("Incorrect API key provided: sk-abc123********xyz."))
         self.assertNotIn("sk-abc123", error)
+        self.assertIn("[REDACTED]", error)
+
+    @patch("paper_reader.llm.client.OpenAI")
+    def test_chat_model_is_selected_from_available_models(self, openai_client) -> None:
+        openai_client.return_value.models.list.return_value.data = [
+            SimpleNamespace(id="text-embedding-3-small"),
+            SimpleNamespace(id="gpt-4.1"),
+            SimpleNamespace(id="gpt-4o-mini"),
+        ]
+
+        model, error = select_chat_model("test-api-key", "https://example.invalid/v1")
+
+        self.assertIsNone(error)
+        self.assertEqual(model, "gpt-4o-mini")
+
+    @patch("paper_reader.llm.client.OpenAI")
+    def test_model_listing_error_is_sanitized(self, openai_client) -> None:
+        openai_client.return_value.models.list.side_effect = RuntimeError("Rejected test-api-key")
+
+        model, error = select_chat_model("test-api-key", "https://example.invalid/v1")
+
+        self.assertIsNone(model)
+        self.assertNotIn("test-api-key", error)
         self.assertIn("[REDACTED]", error)
 
     def test_qa_no_evidence_does_not_invent_citation(self) -> None:

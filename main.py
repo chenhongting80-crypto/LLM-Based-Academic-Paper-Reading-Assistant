@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 
 import pandas as pd
@@ -28,7 +29,7 @@ from paper_reader.exporting.exporters import (
     markdown_to_pdf,
     report_to_markdown,
 )
-from paper_reader.llm.client import get_llm, invoke_text
+from paper_reader.llm.client import get_llm, invoke_text, select_chat_model
 from paper_reader.services.comparison import build_detailed_comparison, comparison_prompt_context
 from paper_reader.services.deletion import apply_successful_deletion_state, delete_selected_papers, selected_paper_names
 from paper_reader.services.papers import ingest_pdf, paper_chunks_for_retrieval
@@ -667,28 +668,59 @@ def app() -> None:
 
     with st.sidebar:
         st.header("API Settings")
-        sidebar_api_key = st.text_input(
-            "API Key",
-            type="password",
-            value="",
-            key="api_key_input",
-        )
-        sidebar_base_url = st.text_input(
-            "Base URL",
-            value="",
-            key="base_url_input",
-        )
-        sidebar_model_name = st.text_input(
-            "Model Name",
-            value="",
-            key="model_name_input",
-        )
+        backend_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        backend_base_url = os.getenv("OPENAI_BASE_URL", "").strip()
+        backend_api_configured = bool(backend_api_key and backend_base_url)
+        if backend_api_configured:
+            st.text_input(
+                "API Key",
+                type="password",
+                value="••••••••••••",
+                disabled=True,
+                key="api_key_masked_display",
+            )
+            st.text_input(
+                "Base URL",
+                type="password",
+                value="••••••••••••",
+                disabled=True,
+                key="base_url_masked_display",
+            )
+            sidebar_api_key = backend_api_key
+            sidebar_base_url = backend_base_url
+        else:
+            sidebar_api_key = st.text_input(
+                "API Key",
+                type="password",
+                value="",
+                key="api_key_input",
+            )
+            sidebar_base_url = st.text_input(
+                "Base URL",
+                value="",
+                key="base_url_input",
+            )
+
+        clean_api_key = sidebar_api_key.strip()
+        clean_base_url = sidebar_base_url.strip()
+        selected_model = ""
+        model_warning = None
+        if clean_api_key and clean_base_url:
+            model_config_fingerprint = sha256(f"{clean_base_url}\0{clean_api_key}".encode()).hexdigest()
+            if st.session_state.get("automatic_model_config") == model_config_fingerprint:
+                selected_model = st.session_state.get("automatic_model", "")
+            if not selected_model:
+                selected_model, model_warning = select_chat_model(clean_api_key, clean_base_url)
+                if selected_model:
+                    st.session_state["automatic_model"] = selected_model
+                    st.session_state["automatic_model_config"] = model_config_fingerprint
+            if model_warning:
+                st.warning(model_warning)
         api_settings = {
-            "api_key": sidebar_api_key.strip(),
-            "base_url": sidebar_base_url.strip(),
-            "model_name": sidebar_model_name.strip(),
+            "api_key": clean_api_key,
+            "base_url": clean_base_url,
+            "model_name": selected_model,
         }
-        st.session_state["api_settings"] = api_settings
         if all(api_settings.values()):
             llm, llm_warning = get_llm(**api_settings)
             if llm_warning:
@@ -1104,7 +1136,7 @@ def app() -> None:
                             question = st.chat_input("Ask a question about this paper.")
                             if question:
                                 if llm is None:
-                                    st.error("Complete API Key, Base URL, and Model Name in API Settings.")
+                                    st.error("Complete API Key and Base URL in API Settings.")
                                 else:
                                     try:
                                         chunks = paper_chunks_for_retrieval(
