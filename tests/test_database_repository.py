@@ -330,6 +330,7 @@ class DatabaseRepositoryTests(DatabaseTestCase):
         state = {
             "selected_paper_id": deleted_id,
             "pending_delete_paper_ids": [deleted_id],
+            "last_upload_messages": ["Saved deleted.pdf to MySQL."],
             "reading_card_generation_summary": {
                 "success": ["deleted.pdf"],
                 "skipped": [],
@@ -342,6 +343,7 @@ class DatabaseRepositoryTests(DatabaseTestCase):
 
         apply_successful_deletion_state(state, [deleted_id], [])
 
+        self.assertEqual(state["last_upload_messages"], [])
         self.assertIsNone(state["reading_card_generation_summary"])
         self.assertEqual(state["reading_card_action_message"], "")
         self.assertEqual(state["reading_card_selected_paper_ids"], [])

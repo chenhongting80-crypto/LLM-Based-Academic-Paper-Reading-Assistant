@@ -26,6 +26,7 @@ def apply_successful_deletion_state(
 ) -> None:
     deleted = set(deleted_ids)
     state["pending_delete_paper_ids"] = []
+    state["last_upload_messages"] = []
     state["paper_delete_selection_reset"] = int(state.get("paper_delete_selection_reset", 0)) + 1
     state["reading_card_generation_summary"] = None
     state["reading_card_action_message"] = ""
