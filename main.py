@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import MutableMapping
 from datetime import UTC, datetime
 from hashlib import sha256
-from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -133,6 +133,8 @@ def init_state() -> None:
         "export_format": "",
         "export_options": {},
         "export_generated_file": None,
+        "export_status_message": "",
+        "export_error_message": "",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -258,13 +260,85 @@ EXPORT_FORMATS = {
 }
 
 
-def reset_export_state() -> None:
-    st.session_state["export_step"] = 1
-    st.session_state["export_content_type"] = ""
-    st.session_state["export_selected_ids"] = []
-    st.session_state["export_format"] = ""
-    st.session_state["export_options"] = {}
-    st.session_state["export_generated_file"] = None
+EXPORT_STATE_DEFAULTS = {
+    "export_step": 1,
+    "export_content_type": "",
+    "export_selected_ids": [],
+    "export_format": "",
+    "export_options": {},
+    "export_generated_file": None,
+    "export_status_message": "",
+    "export_error_message": "",
+}
+EXPORT_WIDGET_KEYS = {
+    1: ("export_content_type_widget",),
+    3: (
+        "export_format_widget",
+        "export_include_sources_widget",
+        "export_include_timestamps_widget",
+    ),
+}
+EXPORT_RECORD_WIDGET_PREFIXES = ("export_card_", "export_chat_", "export_record_")
+
+
+def _export_state(state: MutableMapping | None = None) -> MutableMapping:
+    return state if state is not None else st.session_state
+
+
+def clear_export_selection(step: int, state: MutableMapping | None = None) -> None:
+    target = _export_state(state)
+    if step == 1:
+        target["export_content_type"] = ""
+    elif step == 2:
+        target["export_selected_ids"] = []
+        for key in list(target):
+            if key.startswith(EXPORT_RECORD_WIDGET_PREFIXES):
+                target.pop(key, None)
+    elif step == 3:
+        target["export_format"] = ""
+        target["export_generated_file"] = None
+    target["export_generated_file"] = None
+    target["export_status_message"] = ""
+    target["export_error_message"] = ""
+    for key in EXPORT_WIDGET_KEYS.get(step, ()):
+        target.pop(key, None)
+
+
+def reset_export_state(state: MutableMapping | None = None) -> None:
+    target = _export_state(state)
+    for step in (1, 2, 3):
+        clear_export_selection(step, target)
+    target.pop("export_download_generated", None)
+    for key, value in EXPORT_STATE_DEFAULTS.items():
+        target[key] = value.copy() if isinstance(value, (dict, list)) else value
+
+
+def export_step_ready(step: int, state: MutableMapping | None = None) -> bool:
+    target = _export_state(state)
+    if step == 1:
+        return bool(target.get("export_content_type"))
+    if step == 2:
+        return bool(target.get("export_selected_ids"))
+    if step == 3:
+        return bool(target.get("export_format"))
+    if step == 4:
+        return all(
+            (
+                target.get("export_content_type"),
+                target.get("export_selected_ids"),
+                target.get("export_format"),
+            )
+        )
+    return False
+
+
+def set_export_step(step: int, state: MutableMapping | None = None) -> None:
+    _export_state(state)["export_step"] = step
+
+
+def export_download_ready(state: MutableMapping | None = None) -> bool:
+    target = _export_state(state)
+    return export_step_ready(4, target) and bool(target.get("export_generated_file"))
 
 
 def export_timestamp() -> str:
@@ -625,13 +699,6 @@ def view_reading_card_dialog(record: dict) -> None:
     st.caption(f"Created: {format_timestamp(record.get('created_at'))}")
     st.caption(f"Updated: {format_timestamp(record.get('updated_at'))}")
     st.markdown(reading_card_to_markdown(record.get("card", {})))
-    markdown = reading_card_to_markdown(record.get("card", {}))
-    st.download_button(
-        "Export",
-        markdown,
-        f"{Path(record.get('file_name', 'reading_card')).stem}_reading_card.md",
-        "text/markdown",
-    )
     if st.button("Close"):
         st.rerun()
 
@@ -1317,7 +1384,7 @@ def app() -> None:
             comparison_result = st.session_state.get("compare_result")
             step = int(st.session_state.get("export_step", 1))
             step_labels = ["Content", "Records", "Format", "Review"]
-            progress = " → ".join(
+            progress = " â†’ ".join(
                 f"**{index}. {label}**" if index == step else f"{index}. {label}" for index, label in enumerate(step_labels, start=1)
             )
             st.caption(f"Step {step} of 4")
@@ -1328,15 +1395,35 @@ def app() -> None:
                 content_options = list(EXPORT_FORMATS)
                 current = st.session_state.get("export_content_type", "")
                 index = content_options.index(current) if current in content_options else None
-                selected_content = st.radio("Content type", content_options, index=index)
-                next_cols = st.columns([1, 5, 1])
-                if next_cols[2].button("Next", disabled=not selected_content, key="export_step1_next"):
-                    if selected_content != st.session_state.get("export_content_type"):
-                        st.session_state["export_selected_ids"] = []
-                        st.session_state["export_format"] = ""
+                selected_content = st.radio(
+                    "Content type",
+                    content_options,
+                    index=index,
+                    key="export_content_type_widget",
+                )
+                st.session_state["export_content_type"] = selected_content or ""
+                action_cols = st.columns([1, 1, 4, 1])
+                action_cols[0].button(
+                    "Clear selection",
+                    disabled=not selected_content,
+                    key="export_step1_clear",
+                    on_click=clear_export_selection,
+                    args=(1,),
+                )
+                action_cols[1].button(
+                    "Cancel",
+                    key="export_step1_cancel",
+                    on_click=reset_export_state,
+                )
+                if action_cols[3].button(
+                    "Next",
+                    disabled=not export_step_ready(1),
+                    key="export_step1_next",
+                ):
+                    if selected_content != current:
+                        clear_export_selection(2)
+                        clear_export_selection(3)
                         st.session_state["export_options"] = {}
-                        st.session_state["export_generated_file"] = None
-                    st.session_state["export_content_type"] = selected_content
                     st.session_state["export_step"] = 2
                     st.rerun()
 
@@ -1344,66 +1431,106 @@ def app() -> None:
                 st.subheader("Step 2: Select records")
                 content_type = st.session_state.get("export_content_type", "")
                 selected_ids = list(st.session_state.get("export_selected_ids", []))
-                next_enabled = True
+                choices: list[tuple[str, str, str]] = []
 
                 if content_type == "Reading Cards":
-                    if not cards:
+                    choices = [
+                        (str(item["paper_id"]), item["file_name"], f"export_card_{item['paper_id']}")
+                        for item in cards
+                    ]
+                    if not choices:
                         st.info("No saved reading cards are available.")
-                        next_enabled = False
-                    for item in cards:
-                        checked = st.checkbox(
-                            item["file_name"],
-                            value=item["paper_id"] in selected_ids,
-                            key=f"export_card_{item['paper_id']}",
-                        )
-                        if checked and item["paper_id"] not in selected_ids:
-                            selected_ids.append(item["paper_id"])
-                        if not checked and item["paper_id"] in selected_ids:
-                            selected_ids.remove(item["paper_id"])
-                    next_enabled = bool(selected_ids)
                 elif content_type == "Paper Comparison":
                     if comparison_result:
                         st.write("Current paper comparison result is available.")
                         st.write(f"Compared papers: {len(comparison_result.get('paper_names', []))}")
-                        selected_ids = ["current_comparison"]
+                        choices = [("current_comparison", "Current paper comparison", "export_record_current_comparison")]
                     else:
                         st.info("No current comparison result is available. Create one on the Compare Papers page first.")
-                        selected_ids = []
-                        next_enabled = False
                 elif content_type == "Q&A Chats":
                     if not chats:
                         st.info("No saved Q&A chats are available.")
-                        next_enabled = False
+                    choices = [
+                        (
+                            str(chat["conversation_id"]),
+                            chat["title"],
+                            f"export_chat_{chat['conversation_id']}",
+                        )
+                        for chat in chats
+                    ]
+                elif content_type == "Full Library Report":
+                    st.write(f"Includes {len(papers)} paper(s), {len(cards)} reading card(s), and {len(qa_rows)} Q&A history row(s).")
+                    choices = [("full_library_report", "All available library records", "export_record_full_library_report")]
+                elif content_type == "Metadata and Generated Results Export":
+                    st.write("Includes paper metadata, saved reading cards, Q&A history, Q&A chats, and the current comparison result if available.")
+                    choices = [
+                        (
+                            "metadata_and_generated_results",
+                            "All metadata and generated results",
+                            "export_record_metadata_and_generated_results",
+                        )
+                    ]
+
+                choice_ids = [item_id for item_id, _, _ in choices]
+                selection_cols = st.columns([1, 1, 5])
+                if selection_cols[0].button("Select all", disabled=not choices, key="export_step2_select_all"):
+                    selected_ids = list(choice_ids)
+                    for item_id, _, widget_key in choices:
+                        st.session_state[widget_key] = item_id in selected_ids
+                    st.session_state["export_selected_ids"] = selected_ids
+                    st.rerun()
+                if selection_cols[1].button(
+                    "Deselect all",
+                    disabled=not selected_ids,
+                    key="export_step2_deselect_all",
+                ):
+                    clear_export_selection(2)
+                    st.rerun()
+
+                if content_type == "Q&A Chats":
+                    choice_lookup = {item_id: (label, widget_key) for item_id, label, widget_key in choices}
                     for paper in papers:
                         paper_chats = [chat for chat in chats if chat["paper_id"] == paper["paper_id"]]
                         if not paper_chats:
                             continue
                         with st.expander(paper["file_name"]):
                             for chat in paper_chats:
+                                item_id = str(chat["conversation_id"])
+                                label, widget_key = choice_lookup[item_id]
                                 checked = st.checkbox(
-                                    chat["title"],
-                                    value=chat["conversation_id"] in selected_ids,
-                                    key=f"export_chat_{chat['conversation_id']}",
+                                    label,
+                                    value=item_id in selected_ids,
+                                    key=widget_key,
                                 )
-                                if checked and chat["conversation_id"] not in selected_ids:
-                                    selected_ids.append(chat["conversation_id"])
-                                if not checked and chat["conversation_id"] in selected_ids:
-                                    selected_ids.remove(chat["conversation_id"])
-                    next_enabled = bool(selected_ids)
-                elif content_type == "Full Library Report":
-                    st.write(f"Includes {len(papers)} paper(s), {len(cards)} reading card(s), and {len(qa_rows)} Q&A history row(s).")
-                    selected_ids = ["full_library_report"]
-                elif content_type == "Metadata and Generated Results Export":
-                    st.write("Includes paper metadata, saved reading cards, Q&A history, Q&A chats, and the current comparison result if available.")
-                    selected_ids = ["metadata_and_generated_results"]
+                                if checked and item_id not in selected_ids:
+                                    selected_ids.append(item_id)
+                                if not checked and item_id in selected_ids:
+                                    selected_ids.remove(item_id)
+                else:
+                    for item_id, label, widget_key in choices:
+                        checked = st.checkbox(
+                            label,
+                            value=item_id in selected_ids,
+                            key=widget_key,
+                        )
+                        if checked and item_id not in selected_ids:
+                            selected_ids.append(item_id)
+                        if not checked and item_id in selected_ids:
+                            selected_ids.remove(item_id)
 
+                selected_ids = [item_id for item_id in selected_ids if item_id in choice_ids]
                 st.session_state["export_selected_ids"] = selected_ids
-                nav_cols = st.columns([1, 5, 1])
+                nav_cols = st.columns([1, 1, 4, 1])
                 if nav_cols[0].button("Back", key="export_step2_back"):
-                    st.session_state["export_step"] = 1
+                    set_export_step(1)
                     st.rerun()
-                if nav_cols[2].button("Next", disabled=not next_enabled, key="export_step2_next"):
-                    st.session_state["export_step"] = 3
+                nav_cols[1].button("Cancel", key="export_step2_cancel", on_click=reset_export_state)
+                if nav_cols[3].button(
+                    "Next",
+                    disabled=not export_step_ready(2),
+                    key="export_step2_next",
+                ):
+                    set_export_step(3)
                     st.rerun()
 
             elif step == 3:
@@ -1412,28 +1539,49 @@ def app() -> None:
                 formats = EXPORT_FORMATS.get(content_type, [])
                 current_format = st.session_state.get("export_format", "")
                 index = formats.index(current_format) if current_format in formats else None
-                export_format = st.radio("Export format", formats, horizontal=True, index=index)
+                export_format = st.radio(
+                    "Export format",
+                    formats,
+                    horizontal=True,
+                    index=index,
+                    key="export_format_widget",
+                )
+                st.session_state["export_format"] = export_format or ""
                 options = {}
-                if content_type in {"Q&A Chats"}:
+                if content_type == "Q&A Chats":
                     saved_options = st.session_state.get("export_options", {})
                     options["include_sources"] = st.checkbox(
                         "Include source references",
                         value=saved_options.get("include_sources", True),
+                        key="export_include_sources_widget",
                     )
-                if content_type == "Q&A Chats":
                     options["include_timestamps"] = st.checkbox(
                         "Include timestamps",
                         value=saved_options.get("include_timestamps", True),
+                        key="export_include_timestamps_widget",
                     )
                 st.session_state["export_options"] = options
-                nav_cols = st.columns([1, 5, 1])
-                if nav_cols[0].button("Back", key="export_step3_back"):
-                    st.session_state["export_step"] = 2
+                action_cols = st.columns([1, 1, 1, 3, 1])
+                if action_cols[0].button("Back", key="export_step3_back"):
+                    set_export_step(2)
                     st.rerun()
-                if nav_cols[2].button("Next", disabled=not export_format, key="export_step3_next"):
-                    st.session_state["export_format"] = export_format
-                    st.session_state["export_step"] = 4
+                action_cols[1].button(
+                    "Clear selection",
+                    disabled=not export_format,
+                    key="export_step3_clear",
+                    on_click=clear_export_selection,
+                    args=(3,),
+                )
+                action_cols[2].button("Cancel", key="export_step3_cancel", on_click=reset_export_state)
+                if action_cols[4].button(
+                    "Next",
+                    disabled=not export_step_ready(3),
+                    key="export_step3_next",
+                ):
+                    set_export_step(4)
                     st.session_state["export_generated_file"] = None
+                    st.session_state["export_status_message"] = ""
+                    st.session_state["export_error_message"] = ""
                     st.rerun()
 
             elif step == 4:
@@ -1443,30 +1591,58 @@ def app() -> None:
                 export_format = st.session_state.get("export_format", "")
                 options = dict(st.session_state.get("export_options", {}))
                 records = export_selected_records(content_type, selected_ids, cards, chats)
-                if content_type == "Paper Comparison" and comparison_result:
+                if content_type == "Paper Comparison" and comparison_result and selected_ids:
                     record_names = comparison_result.get("paper_names", [])
                     record_count = len(record_names)
-                elif content_type in {"Full Library Report", "Metadata and Generated Results Export"}:
+                    records_available = True
+                elif content_type in {"Full Library Report", "Metadata and Generated Results Export"} and selected_ids:
                     record_names = ["All available records"]
                     record_count = len(papers)
+                    records_available = True
                 else:
                     record_names = [item.get("file_name") or item.get("title", "Record") for item in records]
                     record_count = len(records)
-                estimated_name = export_filename(content_type, export_format)
+                    records_available = bool(records)
+                selections_complete = export_step_ready(4) and records_available
+                estimated_name = export_filename(content_type, export_format) if selections_complete else "Not available"
 
-                st.write(f"**Content:** {content_type}")
+                st.write(f"**Content:** {content_type or 'Not selected'}")
                 st.write(f"**Selected:** {record_count} record(s)")
                 for name in record_names:
                     st.write(f"- {name}")
-                st.write(f"**Format:** {export_format}")
+                st.write(f"**Format:** {export_format or 'Not selected'}")
                 st.write(f"**Additional options:** {', '.join(f'{key}: {value}' for key, value in options.items()) or 'None'}")
                 st.write(f"**Output:** {estimated_name}")
 
-                nav_cols = st.columns([1, 5, 1])
+                edit_cols = st.columns(4)
+                edit_cols[0].button("Edit records", key="export_edit_records", on_click=set_export_step, args=(2,))
+                edit_cols[1].button("Edit format", key="export_edit_format", on_click=set_export_step, args=(3,))
+                edit_cols[2].button(
+                    "Clear records",
+                    disabled=not selected_ids,
+                    key="export_clear_records",
+                    on_click=clear_export_selection,
+                    args=(2,),
+                )
+                edit_cols[3].button(
+                    "Clear format",
+                    disabled=not export_format,
+                    key="export_clear_format",
+                    on_click=clear_export_selection,
+                    args=(3,),
+                )
+
+                nav_cols = st.columns([1, 1, 4, 1])
                 if nav_cols[0].button("Back", key="export_step4_back"):
-                    st.session_state["export_step"] = 3
+                    set_export_step(3)
                     st.rerun()
-                if nav_cols[2].button("Export", type="primary", key="export_step4_export"):
+                nav_cols[1].button("Cancel", key="export_step4_cancel", on_click=reset_export_state)
+                if nav_cols[3].button(
+                    "Export",
+                    type="primary",
+                    disabled=not selections_complete,
+                    key="export_step4_export",
+                ):
                     try:
                         with st.spinner("Generating export..."):
                             generated = build_export_file(
@@ -1481,25 +1657,32 @@ def app() -> None:
                                 options,
                             )
                         st.session_state["export_generated_file"] = generated
+                        st.session_state["export_status_message"] = "Export generated."
+                        st.session_state["export_error_message"] = ""
                     except Exception as exc:
-                        st.error(f"Export failed: {str(exc).splitlines()[0][:250]}")
+                        st.session_state["export_generated_file"] = None
+                        st.session_state["export_status_message"] = ""
+                        st.session_state["export_error_message"] = f"Export failed: {str(exc).splitlines()[0][:250]}"
 
+                error_message = st.session_state.get("export_error_message", "")
+                if error_message:
+                    st.error(error_message)
                 generated_file = st.session_state.get("export_generated_file")
-                if generated_file:
-                    st.success("Export generated.")
+                download_ready = export_download_ready() and selections_complete
+                if generated_file and download_ready:
+                    st.success(st.session_state.get("export_status_message") or "Export generated.")
                     st.write(f"File: {generated_file['file_name']}")
                     st.write(f"Size: {file_size_label(generated_file['data'])}")
-                    st.download_button(
-                        "Download",
-                        generated_file["data"],
-                        generated_file["file_name"],
-                        generated_file["mime"],
-                        key="export_download_generated",
-                    )
-                    if st.button("Start another export", key="export_start_another"):
-                        reset_export_state()
-                        st.rerun()
-
+                st.download_button(
+                    "Download",
+                    generated_file["data"] if download_ready else b"",
+                    generated_file["file_name"] if download_ready else "export",
+                    generated_file["mime"] if download_ready else "application/octet-stream",
+                    disabled=not download_ready,
+                    key="export_download_generated",
+                )
+                if download_ready:
+                    st.button("Start over", key="export_start_over", on_click=reset_export_state)
 
 if os.getenv("PAPER_READER_SKIP_STREAMLIT_UI") != "1":
     app()
