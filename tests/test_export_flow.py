@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import inspect
 import os
 import unittest
 
 os.environ["PAPER_READER_SKIP_STREAMLIT_UI"] = "1"
 
 from main import (
+    EXPORT_CONTENT_WIDGET_PREFIX,
     EXPORT_STATE_DEFAULTS,
     clear_export_selection,
     export_download_ready,
     export_step_ready,
     reset_export_state,
     set_export_step,
+    sync_export_content_type,
 )
 
 
@@ -23,6 +26,7 @@ class ExportFlowStateTests(unittest.TestCase):
             "other_page_state": "preserve",
             "export_step": step,
             "export_content_type": "Reading Cards",
+            "export_content_type_reset": 0,
             "export_selected_ids": ["paper-1", "paper-2"],
             "export_format": "PDF",
             "export_options": {"include_sources": True},
@@ -33,7 +37,7 @@ class ExportFlowStateTests(unittest.TestCase):
             },
             "export_status_message": "Export generated.",
             "export_error_message": "old error",
-            "export_content_type_widget": "Reading Cards",
+            "export_content_type_widget_0": "Reading Cards",
             "export_format_widget": "PDF",
             "export_card_paper-1": True,
             "export_card_paper-2": True,
@@ -43,13 +47,13 @@ class ExportFlowStateTests(unittest.TestCase):
     def test_step_one_starts_without_selection(self) -> None:
         state = {key: value.copy() if isinstance(value, (dict, list)) else value for key, value in EXPORT_STATE_DEFAULTS.items()}
         self.assertEqual(state["export_step"], 1)
-        self.assertEqual(state["export_content_type"], "")
+        self.assertIsNone(state["export_content_type"])
         self.assertFalse(export_step_ready(1, state))
 
     def test_each_step_can_clear_its_required_selection(self) -> None:
         state = self._complete_state()
         clear_export_selection(1, state)
-        self.assertEqual(state["export_content_type"], "")
+        self.assertIsNone(state["export_content_type"])
         self.assertFalse(export_step_ready(1, state))
 
         state = self._complete_state()
@@ -100,7 +104,7 @@ class ExportFlowStateTests(unittest.TestCase):
             state = self._complete_state(step)
             reset_export_state(state)
             self.assertEqual(state["export_step"], 1)
-            self.assertEqual(state["export_content_type"], "")
+            self.assertIsNone(state["export_content_type"])
             self.assertEqual(state["export_selected_ids"], [])
             self.assertEqual(state["export_format"], "")
             self.assertEqual(state["export_options"], {})
@@ -121,6 +125,37 @@ class ExportFlowStateTests(unittest.TestCase):
         )
         self.assertEqual(state["workspace_id"], "11111111-1111-1111-1111-111111111111")
         self.assertEqual(state["database_data"], {"papers": ["preserve"]})
+
+    def test_content_radio_and_buttons_share_canonical_state(self) -> None:
+        state = {
+            **EXPORT_STATE_DEFAULTS,
+            "export_content_type_reset": 0,
+        }
+        widget_key = f"{EXPORT_CONTENT_WIDGET_PREFIX}0"
+        self.assertIsNone(state["export_content_type"])
+        self.assertFalse(export_step_ready(1, state))
+
+        state[widget_key] = "Reading Cards"
+        sync_export_content_type(widget_key, state)
+        self.assertEqual(state["export_content_type"], "Reading Cards")
+        self.assertTrue(export_step_ready(1, state))
+
+        unchanged = dict(state)
+        self.assertTrue(export_step_ready(1, state))
+        self.assertEqual(state, unchanged)
+
+        clear_export_selection(1, state)
+        self.assertIsNone(state["export_content_type"])
+        self.assertNotIn(widget_key, state)
+        self.assertEqual(state["export_content_type_reset"], 1)
+        self.assertFalse(export_step_ready(1, state))
+
+    def test_progress_separator_is_ascii(self) -> None:
+        source = inspect.getsource(__import__("main").app)
+        self.assertIn('progress = " > ".join(', source)
+        mojibake_arrow = "".join(chr(codepoint) for codepoint in (0x00E2, 0x2020, 0x2019))
+        self.assertNotIn(mojibake_arrow, source)
+        self.assertNotIn(chr(0x2192), source)
 
 
 if __name__ == "__main__":

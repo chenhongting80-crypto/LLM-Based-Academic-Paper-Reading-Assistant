@@ -128,7 +128,8 @@ def init_state() -> None:
         "compare_dialog_reset": 0,
         "compare_result": None,
         "export_step": 1,
-        "export_content_type": "",
+        "export_content_type": None,
+        "export_content_type_reset": 0,
         "export_selected_ids": [],
         "export_format": "",
         "export_options": {},
@@ -262,7 +263,7 @@ EXPORT_FORMATS = {
 
 EXPORT_STATE_DEFAULTS = {
     "export_step": 1,
-    "export_content_type": "",
+    "export_content_type": None,
     "export_selected_ids": [],
     "export_format": "",
     "export_options": {},
@@ -271,7 +272,6 @@ EXPORT_STATE_DEFAULTS = {
     "export_error_message": "",
 }
 EXPORT_WIDGET_KEYS = {
-    1: ("export_content_type_widget",),
     3: (
         "export_format_widget",
         "export_include_sources_widget",
@@ -279,6 +279,7 @@ EXPORT_WIDGET_KEYS = {
     ),
 }
 EXPORT_RECORD_WIDGET_PREFIXES = ("export_card_", "export_chat_", "export_record_")
+EXPORT_CONTENT_WIDGET_PREFIX = "export_content_type_widget_"
 
 
 def _export_state(state: MutableMapping | None = None) -> MutableMapping:
@@ -288,7 +289,11 @@ def _export_state(state: MutableMapping | None = None) -> MutableMapping:
 def clear_export_selection(step: int, state: MutableMapping | None = None) -> None:
     target = _export_state(state)
     if step == 1:
-        target["export_content_type"] = ""
+        target["export_content_type"] = None
+        target["export_content_type_reset"] = int(target.get("export_content_type_reset", 0)) + 1
+        for key in list(target):
+            if key.startswith(EXPORT_CONTENT_WIDGET_PREFIX):
+                target.pop(key, None)
     elif step == 2:
         target["export_selected_ids"] = []
         for key in list(target):
@@ -302,6 +307,16 @@ def clear_export_selection(step: int, state: MutableMapping | None = None) -> No
     target["export_error_message"] = ""
     for key in EXPORT_WIDGET_KEYS.get(step, ()):
         target.pop(key, None)
+
+
+def sync_export_content_type(widget_key: str, state: MutableMapping | None = None) -> None:
+    target = _export_state(state)
+    selected = target.get(widget_key) or None
+    if selected != target.get("export_content_type"):
+        target["export_content_type"] = selected
+        clear_export_selection(2, target)
+        clear_export_selection(3, target)
+        target["export_options"] = {}
 
 
 def reset_export_state(state: MutableMapping | None = None) -> None:
@@ -1384,7 +1399,7 @@ def app() -> None:
             comparison_result = st.session_state.get("compare_result")
             step = int(st.session_state.get("export_step", 1))
             step_labels = ["Content", "Records", "Format", "Review"]
-            progress = " â†’ ".join(
+            progress = " > ".join(
                 f"**{index}. {label}**" if index == step else f"{index}. {label}" for index, label in enumerate(step_labels, start=1)
             )
             st.caption(f"Step {step} of 4")
@@ -1393,19 +1408,25 @@ def app() -> None:
             if step == 1:
                 st.subheader("Step 1: Select content")
                 content_options = list(EXPORT_FORMATS)
-                current = st.session_state.get("export_content_type", "")
+                current = st.session_state.get("export_content_type")
                 index = content_options.index(current) if current in content_options else None
-                selected_content = st.radio(
+                content_widget_key = (
+                    f"{EXPORT_CONTENT_WIDGET_PREFIX}"
+                    f"{st.session_state.get('export_content_type_reset', 0)}"
+                )
+                st.radio(
                     "Content type",
                     content_options,
                     index=index,
-                    key="export_content_type_widget",
+                    key=content_widget_key,
+                    on_change=sync_export_content_type,
+                    args=(content_widget_key,),
                 )
-                st.session_state["export_content_type"] = selected_content or ""
+                content_selected = export_step_ready(1)
                 action_cols = st.columns([1, 1, 4, 1])
                 action_cols[0].button(
                     "Clear selection",
-                    disabled=not selected_content,
+                    disabled=not content_selected,
                     key="export_step1_clear",
                     on_click=clear_export_selection,
                     args=(1,),
@@ -1420,10 +1441,6 @@ def app() -> None:
                     disabled=not export_step_ready(1),
                     key="export_step1_next",
                 ):
-                    if selected_content != current:
-                        clear_export_selection(2)
-                        clear_export_selection(3)
-                        st.session_state["export_options"] = {}
                     st.session_state["export_step"] = 2
                     st.rerun()
 
