@@ -40,6 +40,7 @@ from paper_reader.services.reading_cards import (
     save_or_replace_reading_card,
 )
 from paper_reader.ui.styles import APP_CSS
+from paper_reader.workspace import LEGACY_WORKSPACE_ID, normalize_workspace_id, resolve_workspace_id
 
 APP_SUBTITLE = "Persistent, source-grounded academic reading support for papers."
 logger = logging.getLogger(__name__)
@@ -91,14 +92,14 @@ def get_database_engine():
     return create_app_engine()
 
 
-def get_repository() -> tuple[PaperRepository | None, str, bool]:
+def get_repository(workspace_id: str = LEGACY_WORKSPACE_ID) -> tuple[PaperRepository | None, str, bool]:
     try:
         engine = get_database_engine()
         ok, message = check_database_connection(engine)
         if not ok:
             return None, message, False
         init_database(engine)
-        return PaperRepository(session_factory(engine)), message, True
+        return PaperRepository(session_factory(engine), workspace_id), message, True
     except Exception as exc:
         detail = sanitize_error(exc)
         logger.error("Database initialization failed: %s: %s", type(exc).__name__, detail)
@@ -136,6 +137,42 @@ def init_state() -> None:
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+
+_WORKSPACE_STATE_KEYS = (
+    "last_upload_messages",
+    "selected_paper_id",
+    "pending_delete_paper_ids",
+    "reading_card_selected_paper_ids",
+    "reading_card_selected_paper_names",
+    "reading_card_generation_summary",
+    "reading_card_action_message",
+    "qna_selected_paper_id",
+    "qna_selected_paper_name",
+    "qna_active_conversation_id",
+    "qna_active_conversation_title",
+    "qna_action_message",
+    "qna_expanded_project_id",
+    "qna_pending_new_chat",
+    "compare_selected_paper_ids",
+    "compare_result",
+    "export_selected_ids",
+    "export_generated_file",
+)
+
+
+def initialize_workspace() -> str:
+    query_value = st.query_params.get("workspace")
+    previous = normalize_workspace_id(st.session_state.get("workspace_id"))
+    workspace_id = resolve_workspace_id(query_value, previous)
+    if previous and previous != workspace_id:
+        for key in _WORKSPACE_STATE_KEYS:
+            st.session_state.pop(key, None)
+        init_state()
+    st.session_state["workspace_id"] = workspace_id
+    if normalize_workspace_id(query_value) != workspace_id:
+        st.query_params["workspace"] = workspace_id
+    return workspace_id
 
 
 def card_dataframe(cards: list[dict]) -> pd.DataFrame:
@@ -660,8 +697,9 @@ def app() -> None:
     st.set_page_config(page_title="AI Paper Reader", page_icon="EE", layout="wide")
     st.markdown(APP_CSS, unsafe_allow_html=True)
     init_state()
+    workspace_id = initialize_workspace()
 
-    repository, _, db_ok = get_repository()
+    repository, _, db_ok = get_repository(workspace_id)
 
     st.title("AI Paper Reader")
     st.caption(APP_SUBTITLE)

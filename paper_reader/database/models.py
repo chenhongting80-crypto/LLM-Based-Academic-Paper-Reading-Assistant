@@ -29,7 +29,8 @@ class Paper(Base):
 
     paper_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     file_name: Mapped[str] = mapped_column(String(512), nullable=False)
-    sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    workspace_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     page_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     parse_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
@@ -56,6 +57,8 @@ class Paper(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("workspace_id", "sha256", name="uq_papers_workspace_sha256"),
+        Index("ix_papers_workspace_id", "workspace_id"),
         Index("ix_papers_parse_status", "parse_status"),
         Index("ix_papers_uploaded_at", "uploaded_at"),
     )

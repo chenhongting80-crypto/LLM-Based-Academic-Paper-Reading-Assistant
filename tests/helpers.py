@@ -13,6 +13,7 @@ from sqlalchemy.engine import URL, make_url
 from paper_reader.database.models import Base
 from paper_reader.database.repository import PaperRepository
 from paper_reader.database.session import create_app_engine, init_database, session_factory
+from paper_reader.workspace import LEGACY_WORKSPACE_ID
 
 load_dotenv()
 
@@ -63,7 +64,7 @@ class DatabaseTestCase(unittest.TestCase):
         self.engine = create_app_engine(database_url)
         Base.metadata.drop_all(self.engine)
         init_database(self.engine)
-        self.repository = PaperRepository(session_factory(self.engine))
+        self.repository = PaperRepository(session_factory(self.engine), LEGACY_WORKSPACE_ID)
 
     def tearDown(self) -> None:
         Base.metadata.drop_all(self.engine)

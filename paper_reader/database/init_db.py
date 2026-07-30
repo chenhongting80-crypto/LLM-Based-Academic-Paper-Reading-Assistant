@@ -6,12 +6,13 @@ from pathlib import Path
 
 from paper_reader.database.repository import PaperRepository
 from paper_reader.database.session import create_app_engine, init_database, session_factory
+from paper_reader.workspace import LEGACY_WORKSPACE_ID
 
 
 def initialize_and_migrate(legacy_json_path: Path = Path("data") / "reading_cards.json") -> tuple[int, list[str]]:
     engine = create_app_engine()
     init_database(engine)
-    repository = PaperRepository(session_factory(engine))
+    repository = PaperRepository(session_factory(engine), LEGACY_WORKSPACE_ID)
     return repository.migrate_reading_cards_json(legacy_json_path)
 
 

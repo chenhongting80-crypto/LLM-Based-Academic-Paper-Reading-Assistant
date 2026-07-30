@@ -6,7 +6,7 @@ AI Paper Reader is a local tool for reading and organizing academic papers. It s
 
 - Upload and parse multiple PDF papers.
 - Store paper metadata, text chunks, reading cards, conversations, and Q&A history in MySQL.
-- Detect duplicate uploads through a unique SHA-256 constraint.
+- Detect duplicate uploads within each anonymous workspace through a workspace-scoped SHA-256 constraint.
 - Track source pages, retrieved snippets, model information, and timestamps.
 - Generate structured reading cards from paper content.
 - Ask single-paper questions using TF-IDF retrieval over saved paper chunks.
@@ -77,7 +77,7 @@ main.py
 paper_reader/
   models/                     Pydantic and domain schemas
   database/                   SQLAlchemy ORM, sessions, repository, initialization
-  pdf_processing/             PDF parsing, SHA-256 IDs, page-aware chunking
+  pdf_processing/             PDF parsing, SHA-256 hashing, page-aware chunking
   retrieval/                  TF-IDF retrieval
   llm/                        API setup, prompts, and structured parsing
   services/                   Ingestion, reading cards, Q&A, and comparison
@@ -231,6 +231,22 @@ When the application starts, it connects to the configured MySQL database and au
 
 Existing tables and records are not deleted or rebuilt. Users need to install MySQL and create the database and database account before running the application.
 
+### Upgrading an existing database
+
+The workspace schema change is intentionally not applied during application startup. Back up the database, stop the application, and run the one-time migration explicitly:
+
+```bash
+python -m paper_reader.database.migrate_workspace --apply
+```
+
+The migration assigns every existing paper and its related chunks, reading cards, Q&A history, conversations, and messages to the legacy workspace `00000000-0000-0000-0000-000000000001`. It replaces legacy SHA-based paper IDs with UUIDs while preserving relationships. If it fails, its data rewrite is rolled back. MySQL schema changes are idempotent but, because MySQL commits DDL statements implicitly, the backup remains required.
+
+After migration, existing data is available by opening the application with:
+
+```text
+?workspace=00000000-0000-0000-0000-000000000001
+```
+
 ## Recommended Workflow
 
 ```text
@@ -277,6 +293,12 @@ python -m compileall -q .
 GitHub Actions runs the same checks with a MySQL 8 service container.
 
 LLM-related tests use parsing checks and service mocks. They do not call paid APIs.
+
+## Anonymous Workspaces
+
+Each new visit without a `workspace` URL parameter receives a random anonymous workspace UUID. The ID is stored in the current Streamlit session and in the page URL, so refreshing that URL restores the same workspace. Papers, duplicate detection, chunks, reading cards, Q&A, conversations, comparisons, and exports are restricted to that workspace.
+
+A workspace URL is a bearer link, not authentication: anyone who receives the complete URL can access that workspace. Sharing a URL containing the `workspace` parameter is equivalent to sharing all data in that workspace. Do not upload sensitive, confidential, or regulated documents to a public demo.
 
 ## Privacy and Security
 

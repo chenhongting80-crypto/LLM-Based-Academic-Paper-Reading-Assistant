@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import uuid
 
 from paper_reader.database.repository import RepositoryError
 from paper_reader.pdf_processing.parser import chunk_page_text, compute_sha256, parse_pdf_bytes
@@ -21,11 +22,12 @@ class PdfProcessingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "overlap"):
             chunk_page_text("text", page_number=1, chunk_size=10, overlap=10)
 
-    def test_stable_paper_id_from_sha256(self) -> None:
+    def test_paper_id_is_independent_from_sha256(self) -> None:
         pdf_bytes = make_pdf_bytes(["PFAS removal in groundwater"])
         self.assertEqual(compute_sha256(pdf_bytes), compute_sha256(pdf_bytes))
         parsed = parse_pdf_bytes("paper.pdf", pdf_bytes)
-        self.assertEqual(parsed.paper_id, compute_sha256(pdf_bytes))
+        self.assertEqual(str(uuid.UUID(parsed.paper_id)), parsed.paper_id)
+        self.assertNotEqual(parsed.paper_id, parsed.sha256)
 
     def test_chunking_keeps_page_numbers(self) -> None:
         chunks = chunk_page_text("alpha beta gamma " * 200, page_number=3, chunk_size=80, overlap=10)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from collections.abc import Iterable
@@ -16,6 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from paper_reader.database.config import sanitize_error
 from paper_reader.database.models import Conversation, ConversationMessage, Paper, PaperChunk, QAHistory, ReadingCardRow
 from paper_reader.models.schemas import ReadingCard, RetrievedChunk
+from paper_reader.workspace import normalize_workspace_id
 
 
 class RepositoryError(RuntimeError):
@@ -30,22 +32,38 @@ class DuplicatePaperError(RepositoryError):
 
 
 class PaperRepository:
-    def __init__(self, factory: sessionmaker[Session]) -> None:
+    def __init__(self, factory: sessionmaker[Session], workspace_id: str) -> None:
+        normalized = normalize_workspace_id(workspace_id)
+        if not normalized:
+            raise ValueError("workspace_id must be a valid UUID.")
         self.factory = factory
+        self.workspace_id = normalized
+
+    def _owned_paper(self, session: Session, paper_id: str) -> Paper | None:
+        return session.execute(
+            select(Paper).where(Paper.paper_id == paper_id, Paper.workspace_id == self.workspace_id)
+        ).scalar_one_or_none()
+
+    def _owned_conversation(self, session: Session, conversation_id: str) -> Conversation | None:
+        return session.execute(
+            select(Conversation)
+            .join(Paper)
+            .where(Conversation.conversation_id == conversation_id, Paper.workspace_id == self.workspace_id)
+        ).scalar_one_or_none()
 
     def list_papers(self) -> list[dict[str, Any]]:
         with self.factory() as session:
-            rows = session.execute(select(Paper).order_by(Paper.uploaded_at.desc())).scalars().all()
+            rows = session.execute(select(Paper).where(Paper.workspace_id == self.workspace_id).order_by(Paper.uploaded_at.desc())).scalars().all()
             return [self._paper_to_dict(row) for row in rows]
 
     def get_paper(self, paper_id: str) -> dict[str, Any] | None:
         with self.factory() as session:
-            paper = session.get(Paper, paper_id)
+            paper = self._owned_paper(session, paper_id)
             return self._paper_to_dict(paper) if paper else None
 
     def get_by_sha256(self, sha256_value: str) -> dict[str, Any] | None:
         with self.factory() as session:
-            paper = session.execute(select(Paper).where(Paper.sha256 == sha256_value)).scalar_one_or_none()
+            paper = session.execute(select(Paper).where(Paper.workspace_id == self.workspace_id, Paper.sha256 == sha256_value)).scalar_one_or_none()
             return self._paper_to_dict(paper) if paper else None
 
     def save_paper_with_chunks(
@@ -59,12 +77,13 @@ class PaperRepository:
     ) -> bool:
         with self.factory() as session:
             try:
-                existing = session.execute(select(Paper).where(Paper.sha256 == sha256_value)).scalar_one_or_none()
+                existing = session.execute(select(Paper).where(Paper.workspace_id == self.workspace_id, Paper.sha256 == sha256_value)).scalar_one_or_none()
                 if existing:
                     raise DuplicatePaperError(existing.paper_id, existing.file_name)
                 paper = Paper(
                     paper_id=paper_id,
                     file_name=file_name,
+                    workspace_id=self.workspace_id,
                     sha256=sha256_value,
                     page_count=page_count,
                     parse_status=parse_status,
@@ -92,7 +111,7 @@ class PaperRepository:
     def update_parse_status(self, paper_id: str, parse_status: str) -> None:
         with self.factory() as session:
             try:
-                paper = session.get(Paper, paper_id)
+                paper = self._owned_paper(session, paper_id)
                 if paper:
                     paper.parse_status = parse_status
                 session.commit()
@@ -109,11 +128,12 @@ class PaperRepository:
             return 0
         with self.factory() as session:
             try:
-                papers = session.execute(select(Paper).where(Paper.paper_id.in_(unique_ids))).scalars().all()
+                papers = session.execute(select(Paper).where(Paper.paper_id.in_(unique_ids), Paper.workspace_id == self.workspace_id)).scalars().all()
                 deleted_count = len(papers)
+                owned_ids = [paper.paper_id for paper in papers]
                 if deleted_count:
                     conversation_ids = (
-                        session.execute(select(Conversation.conversation_id).where(Conversation.paper_id.in_(unique_ids)))
+                        session.execute(select(Conversation.conversation_id).where(Conversation.paper_id.in_(owned_ids)))
                         .scalars()
                         .all()
                     )
@@ -122,10 +142,10 @@ class PaperRepository:
                             delete(ConversationMessage).where(ConversationMessage.conversation_id.in_(conversation_ids))
                         )
                         session.execute(delete(Conversation).where(Conversation.conversation_id.in_(conversation_ids)))
-                    session.execute(delete(QAHistory).where(QAHistory.paper_id.in_(unique_ids)))
-                    session.execute(delete(ReadingCardRow).where(ReadingCardRow.paper_id.in_(unique_ids)))
-                    session.execute(delete(PaperChunk).where(PaperChunk.paper_id.in_(unique_ids)))
-                    session.execute(delete(Paper).where(Paper.paper_id.in_(unique_ids)))
+                    session.execute(delete(QAHistory).where(QAHistory.paper_id.in_(owned_ids)))
+                    session.execute(delete(ReadingCardRow).where(ReadingCardRow.paper_id.in_(owned_ids)))
+                    session.execute(delete(PaperChunk).where(PaperChunk.paper_id.in_(owned_ids)))
+                    session.execute(delete(Paper).where(Paper.paper_id.in_(owned_ids), Paper.workspace_id == self.workspace_id))
                 session.commit()
                 return deleted_count
             except Exception as exc:
@@ -137,7 +157,8 @@ class PaperRepository:
             rows = (
                 session.execute(
                     select(PaperChunk)
-                    .where(PaperChunk.paper_id == paper_id)
+                    .join(Paper)
+                    .where(PaperChunk.paper_id == paper_id, Paper.workspace_id == self.workspace_id)
                     .order_by(PaperChunk.page_number, PaperChunk.chunk_index)
                 )
                 .scalars()
@@ -162,13 +183,14 @@ class PaperRepository:
     ) -> dict[str, Any]:
         with self.factory() as session:
             try:
-                paper = session.get(Paper, paper_id)
+                paper = self._owned_paper(session, paper_id)
                 if not paper:
                     raise RepositoryError("Paper not found.")
                 existing_rows = (
                     session.execute(
                         select(ReadingCardRow)
-                        .where(ReadingCardRow.paper_id == paper_id)
+                        .join(Paper)
+                        .where(ReadingCardRow.paper_id == paper_id, Paper.workspace_id == self.workspace_id)
                         .order_by(ReadingCardRow.generated_at.desc(), ReadingCardRow.id.desc())
                     )
                     .scalars()
@@ -206,7 +228,8 @@ class PaperRepository:
             row = (
                 session.execute(
                     select(ReadingCardRow)
-                    .where(ReadingCardRow.paper_id == paper_id)
+                        .join(Paper)
+                        .where(ReadingCardRow.paper_id == paper_id, Paper.workspace_id == self.workspace_id)
                     .order_by(ReadingCardRow.generated_at.desc(), ReadingCardRow.id.desc())
                 )
                 .scalars()
@@ -214,19 +237,21 @@ class PaperRepository:
             )
             if not row:
                 return None
-            paper = session.get(Paper, paper_id)
+            paper = self._owned_paper(session, paper_id)
             return self._reading_card_to_dict(row, paper.file_name if paper else "")
 
     def has_reading_card(self, paper_id: str) -> bool:
         with self.factory() as session:
             return (
-                session.execute(select(ReadingCardRow.id).where(ReadingCardRow.paper_id == paper_id).limit(1)).first()
+                session.execute(select(ReadingCardRow.id).join(Paper).where(ReadingCardRow.paper_id == paper_id, Paper.workspace_id == self.workspace_id).limit(1)).first()
                 is not None
             )
 
     def delete_reading_card_for_paper(self, paper_id: str) -> int:
         with self.factory() as session:
             try:
+                if not self._owned_paper(session, paper_id):
+                    return 0
                 result = session.execute(delete(ReadingCardRow).where(ReadingCardRow.paper_id == paper_id))
                 session.commit()
                 return int(result.rowcount or 0)
@@ -240,6 +265,7 @@ class PaperRepository:
             rows = session.execute(
                 select(ReadingCardRow, Paper.file_name)
                 .join(Paper)
+                .where(Paper.workspace_id == self.workspace_id)
                 .order_by(Paper.file_name, ReadingCardRow.generated_at, ReadingCardRow.id)
             ).all()
             for row, file_name in rows:
@@ -268,7 +294,7 @@ class PaperRepository:
     ) -> dict[str, Any]:
         with self.factory() as session:
             try:
-                paper = session.get(Paper, paper_id)
+                paper = self._owned_paper(session, paper_id)
                 if not paper:
                     raise RepositoryError("Paper not found.")
                 pages = sorted({citation.page_number for citation in citations})
@@ -302,7 +328,7 @@ class PaperRepository:
 
     def list_qa_history(self, paper_id: str | None = None) -> list[dict[str, Any]]:
         with self.factory() as session:
-            statement = select(QAHistory, Paper.file_name).join(Paper)
+            statement = select(QAHistory, Paper.file_name).join(Paper).where(Paper.workspace_id == self.workspace_id)
             if paper_id:
                 statement = statement.where(QAHistory.paper_id == paper_id)
             rows = session.execute(statement.order_by(QAHistory.generated_at.desc())).all()
@@ -311,7 +337,7 @@ class PaperRepository:
     def create_conversation(self, paper_id: str, title: str = "New chat") -> dict[str, Any]:
         with self.factory() as session:
             try:
-                paper = session.get(Paper, paper_id)
+                paper = self._owned_paper(session, paper_id)
                 if not paper:
                     raise RepositoryError("Paper not found.")
                 now = datetime.now(UTC)
@@ -338,7 +364,7 @@ class PaperRepository:
                 session.execute(
                     select(Conversation, Paper.file_name)
                     .join(Paper)
-                    .where(Conversation.paper_id == paper_id)
+                    .where(Conversation.paper_id == paper_id, Paper.workspace_id == self.workspace_id)
                     .order_by(Conversation.updated_at.desc(), Conversation.created_at.desc())
                 )
                 .all()
@@ -347,7 +373,7 @@ class PaperRepository:
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:
         with self.factory() as session:
-            row = session.get(Conversation, conversation_id)
+            row = self._owned_conversation(session, conversation_id)
             if not row:
                 return None
             paper = session.get(Paper, row.paper_id)
@@ -359,7 +385,7 @@ class PaperRepository:
             raise RepositoryError("Chat title cannot be empty.")
         with self.factory() as session:
             try:
-                row = session.get(Conversation, conversation_id)
+                row = self._owned_conversation(session, conversation_id)
                 if not row:
                     raise RepositoryError("Chat not found.")
                 row.title = clean_title
@@ -377,7 +403,7 @@ class PaperRepository:
     def delete_conversation(self, conversation_id: str) -> int:
         with self.factory() as session:
             try:
-                row = session.get(Conversation, conversation_id)
+                row = self._owned_conversation(session, conversation_id)
                 if not row:
                     return 0
                 session.execute(
@@ -395,7 +421,9 @@ class PaperRepository:
             rows = (
                 session.execute(
                     select(ConversationMessage)
-                    .where(ConversationMessage.conversation_id == conversation_id)
+                    .join(Conversation)
+                    .join(Paper)
+                    .where(ConversationMessage.conversation_id == conversation_id, Paper.workspace_id == self.workspace_id)
                     .order_by(ConversationMessage.turn_id, ConversationMessage.message_id)
                 )
                 .scalars()
@@ -412,7 +440,7 @@ class PaperRepository:
     ) -> list[dict[str, Any]]:
         with self.factory() as session:
             try:
-                conversation = session.get(Conversation, conversation_id)
+                conversation = self._owned_conversation(session, conversation_id)
                 if not conversation:
                     raise RepositoryError("Chat not found.")
                 max_turn = session.execute(
@@ -470,7 +498,7 @@ class PaperRepository:
     def delete_conversation_turn(self, conversation_id: str, turn_id: int) -> int:
         with self.factory() as session:
             try:
-                conversation = session.get(Conversation, conversation_id)
+                conversation = self._owned_conversation(session, conversation_id)
                 if not conversation:
                     return 0
                 result = session.execute(
@@ -513,18 +541,29 @@ class PaperRepository:
                         skipped += 1
                         reasons.append(f"Skipped legacy card without paper_id: {file_name}")
                         continue
-                    paper_id = legacy_id if len(legacy_id) == 64 else legacy_id.ljust(64, "0")[:64]
-                    paper = session.get(Paper, paper_id)
+                    sha256_value = (
+                        legacy_id.lower()
+                        if len(legacy_id) == 64 and all(char in "0123456789abcdefABCDEF" for char in legacy_id)
+                        else hashlib.sha256(legacy_id.encode("utf-8")).hexdigest()
+                    )
+                    paper = session.execute(
+                        select(Paper).where(
+                            Paper.workspace_id == self.workspace_id,
+                            Paper.sha256 == sha256_value,
+                        )
+                    ).scalar_one_or_none()
                     if not paper:
                         paper = Paper(
-                            paper_id=paper_id,
+                            paper_id=str(uuid.uuid4()),
                             file_name=file_name,
-                            sha256=paper_id,
+                            workspace_id=self.workspace_id,
+                            sha256=sha256_value,
                             page_count=0,
                             parse_status="legacy_card_only",
                         )
                         session.add(paper)
                         session.flush()
+                    paper_id = paper.paper_id
                     exists = session.execute(
                         select(ReadingCardRow).where(ReadingCardRow.paper_id == paper_id)
                     ).first()

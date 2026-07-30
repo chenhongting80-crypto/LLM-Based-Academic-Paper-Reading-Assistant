@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from hashlib import sha256
+from uuid import uuid4
 
 import fitz
 
@@ -61,6 +62,7 @@ def chunk_page_text(text: str, page_number: int, chunk_size: int = 1200, overlap
 
 def parse_pdf_bytes(file_name: str, pdf_bytes: bytes) -> ParsedPDF:
     digest = compute_sha256(pdf_bytes)
+    paper_id = str(uuid4())
     page_texts: list[dict[str, object]] = []
     chunks: list[dict[str, object]] = []
 
@@ -74,7 +76,7 @@ def parse_pdf_bytes(file_name: str, pdf_bytes: bytes) -> ParsedPDF:
                     chunks.extend(chunk_page_text(text, page_index))
     except Exception as exc:
         return ParsedPDF(
-            paper_id=digest,
+            paper_id=paper_id,
             sha256=digest,
             file_name=file_name,
             page_count=0,
@@ -86,7 +88,7 @@ def parse_pdf_bytes(file_name: str, pdf_bytes: bytes) -> ParsedPDF:
 
     if not page_texts:
         return ParsedPDF(
-            paper_id=digest,
+            paper_id=paper_id,
             sha256=digest,
             file_name=file_name,
             page_count=page_count,
@@ -97,7 +99,7 @@ def parse_pdf_bytes(file_name: str, pdf_bytes: bytes) -> ParsedPDF:
         )
 
     return ParsedPDF(
-        paper_id=digest,
+        paper_id=paper_id,
         sha256=digest,
         file_name=file_name,
         page_count=page_count,
