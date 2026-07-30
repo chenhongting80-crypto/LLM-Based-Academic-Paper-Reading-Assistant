@@ -842,9 +842,11 @@ def app() -> None:
         if not repository:
             st.error("Database connection is unavailable.")
         elif not papers:
+            st.session_state["reading_card_generation_summary"] = None
+            st.session_state["reading_card_action_message"] = ""
+            st.session_state["reading_card_selected_paper_ids"] = []
+            st.session_state["reading_card_selected_paper_names"] = []
             st.info("No papers found in Paper Library. Please upload a paper first.")
-            st.button("Select papers", disabled=True)
-            st.button("Generate reading cards", disabled=True)
         else:
             if st.button("Select papers"):
                 select_reading_card_papers_dialog(papers)
@@ -918,55 +920,56 @@ def app() -> None:
                 st.session_state["reading_card_selected_paper_names"] = []
                 st.session_state["reading_card_dialog_reset"] += 1
 
-        render_generation_summary(st.session_state.get("reading_card_generation_summary"))
+        if not repository or papers:
+            render_generation_summary(st.session_state.get("reading_card_generation_summary"))
 
-        st.divider()
-        st.subheader("Saved Reading Cards")
-        action_message = st.session_state.get("reading_card_action_message", "")
-        if action_message:
-            if action_message.lower().startswith("could not"):
-                st.error(action_message)
+            st.divider()
+            st.subheader("Saved Reading Cards")
+            action_message = st.session_state.get("reading_card_action_message", "")
+            if action_message:
+                if action_message.lower().startswith("could not"):
+                    st.error(action_message)
+                else:
+                    st.success(action_message)
+                st.session_state["reading_card_action_message"] = ""
+
+            if not repository:
+                st.error("Database connection is unavailable.")
             else:
-                st.success(action_message)
-            st.session_state["reading_card_action_message"] = ""
+                saved_cards = repository.list_saved_reading_cards()
+                search_text = st.text_input("Search saved reading cards", value="")
+                if search_text.strip():
+                    lowered = search_text.strip().lower()
+                    saved_cards = [item for item in saved_cards if lowered in item.get("file_name", "").lower()]
 
-        if not repository:
-            st.error("Database connection is unavailable.")
-        else:
-            saved_cards = repository.list_saved_reading_cards()
-            search_text = st.text_input("Search saved reading cards", value="")
-            if search_text.strip():
-                lowered = search_text.strip().lower()
-                saved_cards = [item for item in saved_cards if lowered in item.get("file_name", "").lower()]
+                if not saved_cards:
+                    st.info("No saved reading cards found.")
+                else:
+                    page_size = 8
+                    total_pages = max(1, (len(saved_cards) + page_size - 1) // page_size)
+                    page = 1
+                    if total_pages > 1:
+                        page = st.number_input("Page", min_value=1, max_value=total_pages, value=1, step=1)
+                    start = (int(page) - 1) * page_size
+                    page_cards = saved_cards[start : start + page_size]
 
-            if not saved_cards:
-                st.info("No saved reading cards found.")
-            else:
-                page_size = 8
-                total_pages = max(1, (len(saved_cards) + page_size - 1) // page_size)
-                page = 1
-                if total_pages > 1:
-                    page = st.number_input("Page", min_value=1, max_value=total_pages, value=1, step=1)
-                start = (int(page) - 1) * page_size
-                page_cards = saved_cards[start : start + page_size]
-
-                for record in page_cards:
-                    with st.container(border=True):
-                        info_col, view_col, regenerate_col, delete_col = st.columns([5, 1, 1.4, 1])
-                        info_col.write(f"**{record.get('file_name', 'Paper')}**")
-                        info_col.caption(f"Created: {format_timestamp(record.get('created_at'))}")
-                        info_col.caption(f"Updated: {format_timestamp(record.get('updated_at'))}")
-                        if view_col.button("View", key=f"view_card_{record['paper_id']}"):
-                            view_reading_card_dialog(record)
-                        if regenerate_col.button("Regenerate", key=f"regenerate_card_{record['paper_id']}"):
-                            regenerate_reading_card_dialog(
-                                record,
-                                repository,
-                                llm,
-                                api_settings["model_name"],
-                            )
-                        if delete_col.button("Delete", key=f"delete_card_{record['paper_id']}"):
-                            delete_reading_card_dialog(record, repository)
+                    for record in page_cards:
+                        with st.container(border=True):
+                            info_col, view_col, regenerate_col, delete_col = st.columns([5, 1, 1.4, 1])
+                            info_col.write(f"**{record.get('file_name', 'Paper')}**")
+                            info_col.caption(f"Created: {format_timestamp(record.get('created_at'))}")
+                            info_col.caption(f"Updated: {format_timestamp(record.get('updated_at'))}")
+                            if view_col.button("View", key=f"view_card_{record['paper_id']}"):
+                                view_reading_card_dialog(record)
+                            if regenerate_col.button("Regenerate", key=f"regenerate_card_{record['paper_id']}"):
+                                regenerate_reading_card_dialog(
+                                    record,
+                                    repository,
+                                    llm,
+                                    api_settings["model_name"],
+                                )
+                            if delete_col.button("Delete", key=f"delete_card_{record['paper_id']}"):
+                                delete_reading_card_dialog(record, repository)
 
     with tabs[2]:
         st.subheader("Paper Q&A")

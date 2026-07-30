@@ -27,5 +27,9 @@ def apply_successful_deletion_state(
     deleted = set(deleted_ids)
     state["pending_delete_paper_ids"] = []
     state["paper_delete_selection_reset"] = int(state.get("paper_delete_selection_reset", 0)) + 1
+    state["reading_card_generation_summary"] = None
+    state["reading_card_action_message"] = ""
+    state["reading_card_selected_paper_ids"] = []
+    state["reading_card_selected_paper_names"] = []
     if state.get("selected_paper_id") in deleted:
         state["selected_paper_id"] = remaining_papers[0]["paper_id"] if remaining_papers else ""

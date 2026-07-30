@@ -325,6 +325,28 @@ class DatabaseRepositoryTests(DatabaseTestCase):
         self.assertEqual(state["paper_delete_selection_reset"], 4)
         self.assertEqual(state["selected_paper_id"], remaining_id)
 
+    def test_deleting_all_papers_clears_reading_card_generation_state(self) -> None:
+        deleted_id = "9" * 64
+        state = {
+            "selected_paper_id": deleted_id,
+            "pending_delete_paper_ids": [deleted_id],
+            "reading_card_generation_summary": {
+                "success": ["deleted.pdf"],
+                "skipped": [],
+                "failed": [],
+            },
+            "reading_card_action_message": "Successfully generated",
+            "reading_card_selected_paper_ids": [deleted_id],
+            "reading_card_selected_paper_names": ["deleted.pdf"],
+        }
+
+        apply_successful_deletion_state(state, [deleted_id], [])
+
+        self.assertIsNone(state["reading_card_generation_summary"])
+        self.assertEqual(state["reading_card_action_message"], "")
+        self.assertEqual(state["reading_card_selected_paper_ids"], [])
+        self.assertEqual(state["reading_card_selected_paper_names"], [])
+        self.assertEqual(state["selected_paper_id"], "")
 
 if __name__ == "__main__":
     unittest.main()
