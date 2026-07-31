@@ -1,20 +1,16 @@
 # AI Paper Reader
 
-AI Paper Reader is a local tool for reading and organizing academic papers. It supports PDF upload, structured reading cards, paper-based Q&A, multi-paper comparison, and multiple export formats.
+AI Paper Reader is a Streamlit application for reading, organizing, and comparing academic papers across disciplines.
 
 ## Features
 
-- Upload and parse multiple PDF papers.
-- Store paper metadata, text chunks, reading cards, conversations, and Q&A history in MySQL.
-- Detect duplicate uploads within each anonymous workspace through a workspace-scoped SHA-256 constraint.
-- Track source pages, retrieved snippets, model information, and timestamps.
-- Generate structured reading cards from paper content.
-- Ask single-paper questions using TF-IDF retrieval over saved paper chunks.
-- Show answer citations with source pages and retrieved snippets.
-- Support follow-up questions while grounding answers in retrieved paper content.
-- Compare saved reading cards across multiple papers.
-- Delete papers and their related saved content.
-- Export reading cards, comparisons, Q&A history, reports, and a JSON or ZIP package of metadata and generated results.
+- Parse multiple PDFs into page-aware text chunks and store paper data in MySQL.
+- Generate structured reading cards covering research aims, approaches, evidence, conclusions, limitations, and significance.
+- Answer paper-specific questions using TF-IDF retrieval with page-level citations.
+- Maintain separate conversations and Q&A histories for each paper.
+- Compare saved papers through summary and field-by-field views.
+- Export reading cards, comparisons, reports, and conversation data in multiple formats.
+- Isolate data by anonymous workspace and detect duplicate uploads using SHA-256 file hashes.
 
 ## Screenshots
 
@@ -26,7 +22,7 @@ Persistent storage of parsed papers, metadata, processing status, and deletion c
 
 ### Structured Reading Cards
 
-AI-generated reading cards organize the research question, methods, findings, limitations, and practical relevance.
+Reading cards summarize each paper's research objective, approach, evidence, conclusions, limitations, and significance.
 
 ![Structured Reading Card](docs/images/reading-card.png)
 
@@ -38,7 +34,7 @@ Paper-specific conversations use retrieved source chunks and display supporting 
 
 ### Multi-Paper Comparison
 
-Saved reading cards can be compared through both an AI-generated comparison summary and a detailed field-by-field view covering paper information, research questions, methods, findings, limitations, environmental relevance, and keywords.
+Saved reading cards can be compared through a concise summary or a field-by-field view covering research aims, approaches, evidence, conclusions, limitations, significance, and keywords.
 
 #### Comparison Summary
 
@@ -215,15 +211,12 @@ Do not commit the completed `.env` file.
 python -m streamlit run main.py
 ```
 
-Streamlit normally opens the application at:
+Provide an API key and an OpenAI-compatible base URL in the sidebar, or set
+`OPENAI_API_KEY` and `OPENAI_BASE_URL` as environment variables. The application
+retrieves the available models and selects a compatible chat model automatically.
 
-```text
-http://localhost:8501
-```
-
-On first use, enter your own API Key, Base URL, and Model Name in the Streamlit sidebar.
-
-These values are kept only in the current Streamlit session. They are not loaded from `.env` and are not stored in the project database.
+Backend credentials are masked in the interface and are not written to the
+project database or included in exports.
 
 ## Database Initialization
 
@@ -231,17 +224,20 @@ When the application starts, it connects to the configured MySQL database and au
 
 Existing tables and records are not deleted or rebuilt. Users need to install MySQL and create the database and database account before running the application.
 
-### Upgrading an existing database
+### Migrating a legacy database
 
-The workspace schema change is intentionally not applied during application startup. Back up the database, stop the application, and run the one-time migration explicitly:
+This step is only required for databases created before anonymous workspace
+isolation was introduced.
+
+Back up the database, stop the application, and run:
 
 ```bash
 python -m paper_reader.database.migrate_workspace --apply
 ```
+The migration preserves existing papers, reading cards, conversations, and
+related records, and assigns them to a legacy workspace.
 
-The migration assigns every existing paper and its related chunks, reading cards, Q&A history, conversations, and messages to the legacy workspace `00000000-0000-0000-0000-000000000001`. It replaces legacy SHA-based paper IDs with UUIDs while preserving relationships. If it fails, its data rewrite is rolled back. MySQL schema changes are idempotent but, because MySQL commits DDL statements implicitly, the backup remains required.
-
-After migration, existing data is available by opening the application with:
+After the migration, open the application with:
 
 ```text
 ?workspace=00000000-0000-0000-0000-000000000001
@@ -302,18 +298,14 @@ A workspace URL is a bearer link, not authentication: anyone who receives the co
 
 ## Privacy and Security
 
-- AI API settings are entered in the Streamlit sidebar and retained only for the current session.
+- API settings entered in the sidebar remain in the current Streamlit session; environment-based credentials remain on the server and are masked in the interface.
 - MySQL settings come from the user's system environment or local `.env` file.
 - API keys and database passwords are not stored in application tables, chat history, or exported reports.
 - `.env`, uploaded PDFs, generated exports, local databases, caches, and generated user content are excluded from Git.
 
 ## Known Limitations
 
-- Scanned PDFs require OCR before they can be processed.
-- MySQL must be running for persistent storage.
-- TF-IDF retrieval is less semantic than embedding-based retrieval.
+- Image-only and scanned PDFs require OCR before upload.
+- Persistent storage requires a running MySQL instance.
+- TF-IDF relies on lexical overlap and may miss passages that use different terminology for related concepts.
 
-## Future Extensions
-
-- Add OCR support for scanned PDFs.
-- Add embedding-based retrieval for more semantic search.
